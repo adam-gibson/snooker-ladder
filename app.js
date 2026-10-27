@@ -205,6 +205,11 @@ const waChallengeText = c =>
   `🎱 Snooker ladder challenge\n${c.challengerName} (#${c.challengerPos}) has challenged ${c.defenderName} (#${c.defenderPos}).\n` +
   `The match must be played by ${fmt(c.deadline)}.\n${siteUrl()}`;
 
+const inviteText = p =>
+  `🎱 Patteson Social Club Snooker Ladder\nHi ${p.name}, here are your private ladder details.\n\n` +
+  `Ladder: ${siteUrl()}\nYour PIN: ${p.pin}\n\nPhone alerts: in the ntfy app tap + and enter this topic:\n${p.ntfy}\n\n` +
+  `Player guide: ${siteUrl().replace(/\/?$/, "/")}Player-Guide.pdf`;
+
 /* ---------- Player actions ---------- */
 
 function challenge(targetId) {
@@ -336,6 +341,7 @@ async function renderAdmin() {
       <thead><tr><th>#</th><th>Name</th><th>Mobile</th><th>PIN</th><th>Alert topic</th><th></th></tr></thead>
       <tbody>${players.map(p => `<tr><td>${p.position}</td><td>${esc(p.name)}</td><td>${esc(p.phone)}</td><td>${esc(p.pin)}</td>
         <td><code>${esc(p.ntfy)}</code></td><td><div class="actions">
+        <a class="btn sm whatsapp" target="_blank" rel="noopener" href="${waLink(p.phone, inviteText(p))}">Send details</a>
         <button class="sm secondary" data-a="edit" data-id="${p.id}">Edit</button>
         <button class="sm secondary" data-a="move" data-id="${p.id}">Move</button>
         <button class="sm secondary" data-a="pin" data-id="${p.id}">New PIN</button>
