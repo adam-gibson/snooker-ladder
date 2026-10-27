@@ -160,7 +160,7 @@ function card(c) {
         <button class="danger" data-act="dispute" data-id="${c.id}">Dispute</button>`;
     }
   } else {
-    info = '<div class="warn">Result disputed. The admin will decide.</div>';
+    info = '<div class="warn">Result disputed. Adam will decide.</div>';
   }
   return `<article class="card ${c.status}">
     <div class="vs">#${c.challengerPos} ${esc(c.challengerName)} <small>challenged</small> #${c.defenderPos} ${esc(c.defenderName)}</div>
@@ -265,7 +265,7 @@ function result(c) {
 function confirmResult(c, dispute) {
   modal({
     title: dispute ? 'Dispute result' : 'Confirm result',
-    body: (dispute ? '<p>The admin will be asked to decide the result.</p>' : '<p>The ladder will update straight away.</p>') + pinField(),
+    body: (dispute ? '<p>Adam will be asked to decide the result.</p>' : '<p>The ladder will update straight away.</p>') + pinField(),
     ok: dispute ? 'Dispute' : 'Confirm',
     onOk: f => post({ action: dispute ? 'dispute' : 'confirm', playerId: me, pin: f.get('pin'), challengeId: c.id })
   });
