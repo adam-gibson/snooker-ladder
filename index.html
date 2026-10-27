@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Snooker Ladder</title>
+  <meta name="description" content="Patteson Social Club Snooker Ladder">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23c62828'/></svg>">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Patteson Social Club Snooker Ladder</h1>
+    <p id="season"></p>
+  </header>
+
+  <main id="playerView">
+    <section class="me-bar">
+      <label>I am
+        <select id="me"><option value="">Choose your name…</option></select>
+      </label>
+      <p id="meHint" class="muted"></p>
+    </section>
+
+    <section>
+      <h2>Ladder</h2>
+      <ol id="ladder" class="ladder"><li class="muted">Loading…</li></ol>
+      <p class="key">
+        <span class="swatch busy"></span> In a challenge
+        <span class="swatch target"></span> You can challenge
+        <span class="swatch me"></span> You
+      </p>
+    </section>
+
+    <section>
+      <h2>Challenges in progress</h2>
+      <div id="challenges"></div>
+    </section>
+
+    <section>
+      <h2>Recent results</h2>
+      <ul id="history" class="history"></ul>
+    </section>
+
+    <details class="rules">
+      <summary>Ladder rules</summary>
+      <ul>
+        <li>You can challenge the player 1 or 2 places above you, as long as neither of you is already in a challenge.</li>
+        <li>The challenged player must accept. The match (best of 3 frames) must be played within <b>240 hours (10 days)</b> of the challenge. The site will not accept a booking after the deadline.</li>
+        <li>Challenger beats the player directly above: they swap places.</li>
+        <li>Challenger beats the player 2 places above: the challenger takes that place, the beaten player drops 1, and the player in between drops into the challenger's old place.</li>
+        <li>Challenger loses: nobody moves.</li>
+        <li><b>If no result is entered by the deadline, it counts as a win for the challenger</b> and the ladder updates automatically.</li>
+        <li>Either player enters the score with their PIN. The other player confirms it, or it is confirmed automatically after 24 hours.</li>
+        <li>To leave the ladder, ask the admin in the WhatsApp group. Everyone below moves up one place.</li>
+      </ul>
+      <h3>Phone alerts (free)</h3>
+      <p>Install the <b>ntfy</b> app (Android or iPhone), tap <b>+</b> and subscribe to the topic the admin sends you. You will get an alert whenever you are challenged or a result needs confirming.</p>
+    </details>
+
+    <footer>
+      <button id="changePin" class="secondary">Change my PIN</button>
+      <a href="#admin">Admin</a>
+    </footer>
+  </main>
+
+  <main id="adminView" hidden></main>
+
+  <dialog id="modal"></dialog>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
