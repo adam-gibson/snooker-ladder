@@ -217,6 +217,18 @@ const ACTIONS = {
     newChallenge(db, r.challengerId, r.defenderId, start, true);
   },
 
+  adminBook(db, r) {
+    admin(db, r);
+    const ch = findChallenge(db, r.challengeId, ['open']);
+    const t = Date.parse(r.when);
+    if (isNaN(t)) fail('Please choose a date and time.');
+    if (t > Date.parse(ch.deadline)) fail('The match must be played by ' + fmt(ch.deadline) + '.');
+    ch.booked = iso(t);
+    log(db, `Admin booked ${nameOf(db, ch.challengerId)} v ${nameOf(db, ch.defenderId)} for ${fmt(t)}`);
+    [ch.challengerId, ch.defenderId].forEach(id =>
+      notify(db, byId(db, id), 'Match booked', `Your ladder match has been booked for ${fmt(t)}.`));
+  },
+
   adminCancel(db, r) {
     admin(db, r);
     cancel(db, findChallenge(db, r.challengeId, ACTIVE));

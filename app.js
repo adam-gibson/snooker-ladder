@@ -352,7 +352,9 @@ async function renderAdmin() {
       ${state.challenges.length ? state.challenges.map(c => `<div class="card ${c.status}">
         <div class="vs">#${c.challengerPos} ${esc(c.challengerName)} <small>challenged</small> #${c.defenderPos} ${esc(c.defenderName)}</div>
         <div>Status: <b>${c.status}</b>${c.status !== 'open' ? ` (entered ${c.cFrames}–${c.dFrames}, challenger first)` : ''} · Deadline ${fmt(c.deadline)}</div>
-        <div class="actions"><button class="sm primary" data-a="result" data-id="${c.id}">Set result</button>
+        <div>${c.booked ? `Match booked: <b>${fmt(c.booked)}</b>` : '<span class="warn">Date not booked yet</span>'}</div>
+        <div class="actions">${c.status === 'open' ? `<button class="sm secondary" data-a="book" data-id="${c.id}">${c.booked ? 'Change date' : 'Book date'}</button>` : ''}
+        <button class="sm primary" data-a="result" data-id="${c.id}">Set result</button>
         <button class="sm danger" data-a="cancel" data-id="${c.id}">Cancel challenge</button></div></div>`).join('')
         : '<p class="muted">None.</p>'}
       <h3>Add a challenge manually</h3>
@@ -430,6 +432,13 @@ async function renderAdmin() {
         title: `Remove ${p.name}?`,
         body: '<p>Everyone below them moves up one place. Any challenge they are in will be cancelled.</p>', ok: 'Remove',
         onOk: async () => { await admin('adminRemovePlayer', { id: p.id }); return done; }
+      });
+      if (a === 'book') modal({
+        title: 'Book the match',
+        body: `<p>${esc(c.challengerName)} v ${esc(c.defenderName)}. Must be on or before <b>${fmt(c.deadline)}</b>.</p>
+          <label>Date and time<input type="datetime-local" name="when" required max="${toLocalInput(c.deadline)}" value="${c.booked ? toLocalInput(c.booked) : ''}"></label>`,
+        ok: 'Save',
+        onOk: async f => { await admin('adminBook', { challengeId: c.id, when: new Date(f.get('when')).toISOString() }); return done; }
       });
       if (a === 'result') modal({
         title: 'Set result', body: resultFields(c) + '<p class="muted">The ladder updates straight away.</p>', ok: 'Save result',
