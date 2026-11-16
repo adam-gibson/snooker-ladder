@@ -51,6 +51,15 @@ Send each player a private WhatsApp message with:
 - Ladder moves are worked out from players' current positions when the result is applied. If other results have shifted players in the meantime, the challenger still takes the defender's place, and everyone between them drops one.
 - New challenges stop when there are fewer than 240 hours left in the season.
 
+## Holiday and working away
+- A player taps **I'm away**, chooses Holiday or Working away and the dates, and enters their PIN.
+- Up to 14 days at a time, 42 days a season, at least 7 days back between absences, booked up to 60 days ahead. (Change these in `AWAY` at the top of the script.)
+- While away they keep their place and cannot challenge or be challenged. Their row is grey with the date they are back.
+- A player in a challenge cannot book time away that starts before its deadline. The admin decides these cases.
+- If someone is challenged before a booked absence starts, the deadline moves back by the length of the absence.
+- They can cancel a booking or come back early. On their last day away they get a phone alert.
+- Admin can add or end time away for anyone with **Away** on the Players list; the limits do not apply to the admin.
+
 ## Admin can
 - Add a player, with their position
 - Edit a player's name, mobile or alert topic

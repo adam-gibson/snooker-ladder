@@ -22,8 +22,12 @@ const SHEETS = {
   Challenges: ['id', 'challengerId', 'defenderId', 'challengerPos', 'defenderPos', 'created', 'deadline',
     'status', 'booked', 'cFrames', 'dFrames', 'enteredBy', 'enteredAt', 'resolvedAt', 'outcome'],
   Settings: ['key', 'value'],
-  Log: ['time', 'event']
+  Log: ['time', 'event'],
+  Absences: ['id', 'playerId', 'type', 'start', 'end', 'status', 'createdAt', 'reminded']
 };
+// Holiday / working away: days at a time, days per season, days back between absences, days ahead it can be booked.
+const AWAY = { maxDays: 14, seasonDays: 42, gapDays: 7, aheadDays: 60 };
+const AWAY_TYPES = { holiday: 'Holiday', work: 'Working away' };
 const ACTIVE = ['open', 'pending', 'disputed'];
 const HOUR = 3600 * 1000;
 const TZ = 'Europe/London';
@@ -41,6 +45,7 @@ function setup() {
     id: uid(), name, position: i + 1, active: 'TRUE', pin: randomPin(4), phone: '', ntfy: newTopic()
   })));
   writeTable('Challenges', []);
+  writeTable('Absences', []);
   writeTable('Settings', [
     { key: 'clubName', value: 'Patteson Social Club Snooker Ladder' },
     { key: 'seasonStart', value: '2026-02-01T00:00:00.000Z' },
@@ -79,7 +84,8 @@ function doPost(e) {
     const action = ACTIONS[req.action];
     if (!action) fail('Unknown action.');
     const db = load();
-    processDue(db);
+    if (processDue(db)) save(db); // keep automatic updates even if the action below fails
+    db.logs = [];
     const result = action(db, req) || {};
     save(db);
     result.state = publicState(db);
@@ -145,6 +151,19 @@ const ACTIONS = {
     log(db, `${me.name} disputed the result of ${nameOf(db, ch.challengerId)} v ${nameOf(db, ch.defenderId)}`);
   },
 
+  away(db, r) {
+    const me = auth(db, r.playerId, r.pin);
+    const a = addAbsence(db, me, r, false);
+    log(db, `${me.name}: ${AWAY_TYPES[a.type]} ${fmtDay(a.start)} to ${fmtDay(a.end)}`);
+  },
+
+  endAway(db, r) {
+    const me = auth(db, r.playerId, r.pin);
+    const a = db.absences.find(x => x.id === r.absenceId && x.playerId === me.id && x.status === 'active');
+    if (!a) fail('Absence not found. Please refresh the page.');
+    endAbsence(db, a, me.name);
+  },
+
   changePin(db, r) {
     const me = auth(db, r.playerId, r.pin);
     if (!/^\d{4}$/.test(String(r.newPin))) fail('The new PIN must be 4 digits.');
@@ -157,7 +176,10 @@ const ACTIONS = {
   adminData(db, r) {
     admin(db, r);
     return {
-      players: ladder(db).map(p => ({ id: p.id, name: p.name, position: p.position, pin: p.pin, phone: p.phone, ntfy: p.ntfy })),
+      players: ladder(db).map(p => ({
+        id: p.id, name: p.name, position: p.position, pin: p.pin, phone: p.phone, ntfy: p.ntfy,
+        absences: absences(db, p.id).filter(x => x.end >= londonDay(Date.now())).map(publicAbsence), awayUsed: daysUsed(db, p.id)
+      })),
       settings: { siteUrl: db.settings.siteUrl, seasonStart: db.settings.seasonStart, seasonEnd: db.settings.seasonEnd },
       log: readTable('Log').slice(-100).reverse()
     };
@@ -242,6 +264,20 @@ const ACTIONS = {
     finish(db, ch, c > d ? 'challenger' : 'defender', Date.now());
   },
 
+  adminAway(db, r) {
+    admin(db, r);
+    const p = find(db, r.id);
+    const a = addAbsence(db, p, r, true);
+    log(db, `Admin set ${p.name}: ${AWAY_TYPES[a.type]} ${fmtDay(a.start)} to ${fmtDay(a.end)}`);
+  },
+
+  adminEndAway(db, r) {
+    admin(db, r);
+    const a = db.absences.find(x => x.id === r.absenceId && x.status === 'active');
+    if (!a) fail('Absence not found.');
+    endAbsence(db, a, 'Admin');
+  },
+
   adminSettings(db, r) {
     admin(db, r);
     db.settings.siteUrl = String(r.siteUrl || '').trim();
@@ -277,8 +313,25 @@ function newChallenge(db, challengerId, defenderId, start, byAdmin) {
   if (gap < 1 || gap > 2) fail('A player can only challenge someone 1 or 2 places above them.');
   if (busy(db, c.id)) fail(c.name + ' is already in a challenge.');
   if (busy(db, d.id)) fail(d.name + ' is already in a challenge.');
+  const startDay = londonDay(start);
+  if (!byAdmin) {
+    if (awayOn(db, c.id, startDay)) fail('You are marked as away, so you cannot make a challenge.');
+    if (awayOn(db, d.id, startDay)) fail(d.name + ' is away and cannot be challenged until they are back.');
+  }
   const hours = Number(db.settings.challengeHours);
-  const deadline = start + hours * HOUR;
+  let deadline = start + hours * HOUR;
+  // An absence booked to start before the deadline moves the deadline back by its length.
+  const counted = {};
+  let more = true;
+  while (more) {
+    more = false;
+    db.absences.filter(a => a.status === 'active' && (a.playerId === c.id || a.playerId === d.id) && !counted[a.id] &&
+      a.start > startDay && a.start <= londonDay(deadline)).forEach(a => {
+      counted[a.id] = true;
+      deadline += absDays(a.start, a.end) * 24 * HOUR;
+      more = true;
+    });
+  }
   if (!byAdmin) {
     if (start < Date.parse(db.settings.seasonStart)) fail('The season has not started yet.');
     if (deadline > Date.parse(db.settings.seasonEnd)) fail(`No new challenges: there are fewer than ${hours} hours left in the season.`);
@@ -288,7 +341,8 @@ function newChallenge(db, challengerId, defenderId, start, byAdmin) {
     created: iso(start), deadline: iso(deadline), status: 'open'
   };
   db.challenges.push(ch);
-  log(db, `${c.name} (#${c.position}) challenged ${d.name} (#${d.position}). Deadline ${fmt(deadline)}`);
+  log(db, `${c.name} (#${c.position}) challenged ${d.name} (#${d.position}). Deadline ${fmt(deadline)}` +
+    (Object.keys(counted).length ? ' (extended for a planned absence)' : ''));
   notify(db, d, 'You have been challenged!',
     `${c.name} (#${c.position}) has challenged you. The match must be played by ${fmt(deadline)}.`);
   return ch;
@@ -338,7 +392,14 @@ function processDue(db) {
     .sort((a, b) => a.at - b.at);
   due.forEach(({ ch, at }) => finish(db, ch,
     ch.status === 'open' ? 'expired' : Number(ch.cFrames) > Number(ch.dFrames) ? 'challenger' : 'defender', at));
-  return due.length > 0;
+  // Reminder on the last day of an absence, from 9am.
+  const day = londonDay(now), hour = Number(Utilities.formatDate(new Date(now), TZ, 'H'));
+  const remind = hour >= 9 ? db.absences.filter(a => a.status === 'active' && a.end === day && a.reminded !== 'TRUE') : [];
+  remind.forEach(a => {
+    a.reminded = 'TRUE';
+    notify(db, byId(db, a.playerId), 'Welcome back tomorrow', `Your time away (${AWAY_TYPES[a.type].toLowerCase()}) on the ladder ends today. From tomorrow you can challenge and be challenged again.`);
+  });
+  return due.length > 0 || remind.length > 0;
 }
 
 function frames(r) {
@@ -346,6 +407,60 @@ function frames(r) {
   if (!((c === 2 && d < 2 && d >= 0) || (d === 2 && c < 2 && c >= 0))) fail('Best of 3: the score must be 2-0 or 2-1.');
   return [c, d];
 }
+
+/* ---------- Holiday / working away ---------- */
+
+function londonDay(t) { return Utilities.formatDate(new Date(t), TZ, 'yyyy-MM-dd'); }
+function dayNo(d) { return Math.round(Date.parse(d + 'T12:00:00Z') / (24 * HOUR)); }
+function plusDays(d, n) { return new Date(Date.parse(d + 'T12:00:00Z') + n * 24 * HOUR).toISOString().slice(0, 10); }
+function absDays(a, b) { return dayNo(b) - dayNo(a) + 1; }
+function absences(db, id) { return db.absences.filter(a => a.playerId === id && a.status === 'active'); }
+function awayOn(db, id, day) { return absences(db, id).find(a => a.start <= day && day <= a.end); }
+
+// Days of absence that fall inside the current season.
+function daysUsed(db, id, ignoreId) {
+  const s = londonDay(Date.parse(db.settings.seasonStart)), e = londonDay(Date.parse(db.settings.seasonEnd));
+  return absences(db, id).filter(a => a.id !== ignoreId).reduce((n, a) => {
+    const from = a.start > s ? a.start : s, to = a.end < e ? a.end : e;
+    return n + Math.max(0, absDays(from, to));
+  }, 0);
+}
+
+function addAbsence(db, p, r, byAdmin) {
+  const type = r.type in AWAY_TYPES ? r.type : fail('Please choose Holiday or Working away.');
+  const start = String(r.start || ''), end = String(r.end || ''), today = londonDay(Date.now());
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) fail('Please choose the dates.');
+  if (end < start) fail('The last day must be on or after the first day.');
+  const days = absDays(start, end), others = absences(db, p.id);
+  if (end < today) fail('Those dates are in the past.');
+  if (others.some(a => a.start <= end && start <= a.end)) fail('This overlaps an absence already booked.');
+  if (!byAdmin) {
+    if (start < today) fail('The first day cannot be in the past.');
+    if (start > plusDays(today, AWAY.aheadDays)) fail(`You can book up to ${AWAY.aheadDays} days ahead.`);
+    if (days > AWAY.maxDays) fail(`An absence can be up to ${AWAY.maxDays} days.`);
+    others.forEach(a => {
+      const gap = a.end < start ? dayNo(start) - dayNo(a.end) - 1 : dayNo(a.start) - dayNo(end) - 1;
+      if (gap < AWAY.gapDays) fail(`You need at least ${AWAY.gapDays} days back between absences.`);
+    });
+    const used = daysUsed(db, p.id);
+    if (used + days > AWAY.seasonDays) fail(`That would take you over ${AWAY.seasonDays} days this season. You have ${AWAY.seasonDays - used} days left.`);
+    const ch = db.challenges.find(c => ACTIVE.includes(c.status) && (c.challengerId === p.id || c.defenderId === p.id));
+    if (ch && londonDay(Date.parse(ch.deadline)) >= start) fail('You are in a challenge. Please finish it first, or ask Adam.');
+  }
+  const a = { id: uid(), playerId: p.id, type, start, end, status: 'active', createdAt: iso(Date.now()), reminded: '' };
+  db.absences.push(a);
+  return a;
+}
+
+// Ending early: an absence that has not started (or started today) is cancelled; otherwise it ends yesterday.
+function endAbsence(db, a, who) {
+  const today = londonDay(Date.now());
+  if (a.start >= today) a.status = 'cancelled';
+  else if (a.end >= today) a.end = plusDays(today, -1);
+  log(db, `${who} ended ${nameOf(db, a.playerId)}'s ${AWAY_TYPES[a.type].toLowerCase()} (${a.status === 'cancelled' ? 'cancelled' : 'back from today'})`);
+}
+
+function publicAbsence(a) { return a ? { id: a.id, type: a.type, label: AWAY_TYPES[a.type], start: a.start, end: a.end } : null; }
 
 /* ---------- Helpers ---------- */
 
@@ -414,7 +529,14 @@ function publicState(db) {
       clubName: s.clubName, seasonStart: s.seasonStart, seasonEnd: s.seasonEnd,
       challengeHours: Number(s.challengeHours), confirmHours: Number(s.confirmHours), siteUrl: s.siteUrl
     },
-    players: ladder(db).map(p => ({ id: p.id, name: p.name, position: p.position, phone: p.phone })),
+    away: AWAY,
+    players: ladder(db).map(p => {
+      const day = londonDay(Date.now()), mine = absences(db, p.id).filter(a => a.end >= day).sort((a, b) => a.start < b.start ? -1 : 1);
+      return {
+        id: p.id, name: p.name, position: p.position, phone: p.phone,
+        away: publicAbsence(mine.find(a => a.start <= day)), absences: mine.map(publicAbsence), awayUsed: daysUsed(db, p.id)
+      };
+    }),
     challenges: db.challenges.filter(c => ACTIVE.includes(c.status)).map(c => publicChallenge(db, c)),
     history: db.challenges
       .filter(c => !ACTIVE.includes(c.status) && Date.parse(c.resolvedAt) >= seasonStart)
@@ -444,6 +566,7 @@ function clampPos(pos, max) {
 function fail(msg) { throw new Error(msg); }
 function uid() { return Utilities.getUuid().replace(/-/g, '').slice(0, 10); }
 function iso(t) { return new Date(t).toISOString(); }
+function fmtDay(d) { return Utilities.formatDate(new Date(d + 'T12:00:00Z'), 'UTC', 'EEE d MMM'); }
 function fmt(t) { return Utilities.formatDate(new Date(typeof t === 'string' ? Date.parse(t) : t), TZ, 'EEE d MMM HH:mm'); }
 function randomPin(len) { let s = ''; while (s.length < len) s += Math.floor(Math.random() * 10); return s; }
 function newTopic() { return 'psc-ladder-' + Utilities.getUuid().replace(/-/g, '').slice(0, 12); }
@@ -462,6 +585,7 @@ function load() {
     challenges: readTable('Challenges').map(c => Object.assign(c, {
       challengerPos: Number(c.challengerPos), defenderPos: Number(c.defenderPos)
     })),
+    absences: readTable('Absences'),
     logs: []
   };
 }
@@ -469,6 +593,7 @@ function load() {
 function save(db) {
   writeTable('Players', db.players.map(p => Object.assign({}, p, { active: p.active ? 'TRUE' : 'FALSE' })));
   writeTable('Challenges', db.challenges);
+  writeTable('Absences', db.absences);
   writeTable('Settings', Object.keys(db.settings).map(key => ({ key, value: db.settings[key] })));
   if (db.logs.length) {
     const sh = SpreadsheetApp.getActive().getSheetByName('Log');
@@ -477,8 +602,20 @@ function save(db) {
   }
 }
 
+// Creates a tab if it is missing (e.g. Absences on a ladder set up before that feature).
+function sheet(name) {
+  const ss = SpreadsheetApp.getActive();
+  let sh = ss.getSheetByName(name);
+  if (!sh) {
+    sh = ss.insertSheet(name);
+    sh.getRange('A:Z').setNumberFormat('@');
+    sh.getRange(1, 1, 1, SHEETS[name].length).setValues([SHEETS[name]]);
+  }
+  return sh;
+}
+
 function readTable(name) {
-  const values = SpreadsheetApp.getActive().getSheetByName(name).getDataRange().getValues();
+  const values = sheet(name).getDataRange().getValues();
   const head = values.shift() || [];
   return values.filter(r => r[0] !== '').map(r => {
     const o = {};
@@ -488,7 +625,7 @@ function readTable(name) {
 }
 
 function writeTable(name, rows) {
-  const sh = SpreadsheetApp.getActive().getSheetByName(name), head = SHEETS[name];
+  const sh = sheet(name), head = SHEETS[name];
   const data = [head].concat(rows.map(r => head.map(h => (r[h] === undefined || r[h] === null ? '' : String(r[h])))));
   sh.clearContents();
   sh.getRange(1, 1, data.length, head.length).setNumberFormat('@').setValues(data);

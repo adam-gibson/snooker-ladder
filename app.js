@@ -20,6 +20,9 @@ const fmt = t => new Date(t).toLocaleString('en-GB', {
   weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London'
 });
 const fmtDate = t => new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Europe/London' });
+const fmtDay = d => new Date(d + 'T12:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+const awayIcon = a => (a.type === 'holiday' ? '🏖' : '💼');
+const londonDay = (t = now()) => new Date(t).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
 const toLocalInput = t => { const d = new Date(t); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
 const pinField = (label = 'Your 4-digit PIN', name = 'pin') =>
   `<label>${label}<input name="${name}" type="password" inputmode="numeric" pattern="\\d{4}" maxlength="4" required autocomplete="off"></label>`;
@@ -49,6 +52,8 @@ async function post(body) {
 
 function setState(s) {
   state = s;
+  s.players.forEach(p => { p.absences = p.absences || []; });
+  $('#awayBtn').hidden = !s.away; // hidden until the updated script is deployed
   skew = Date.parse(s.now) - Date.now();
   if (!location.hash.startsWith('#admin')) render();
 }
@@ -82,6 +87,7 @@ function modal({ title, body, ok = 'OK', cancel = 'Cancel', onOk }) {
   d.showModal();
   const first = d.querySelector('input, select');
   if (first) first.focus();
+  return form;
 }
 
 const notice = (title, body) => modal({ title, body, ok: 'Close', cancel: '' });
@@ -107,21 +113,25 @@ function render() {
     sorted.map(p => `<option value="${p.id}" ${p.id === me ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
 
   const mine = player(me);
-  const canChallenge = mine && !activeFor(mine.id) && seasonOpen();
-  const targets = state.players.filter(p => canChallenge && !activeFor(p.id) &&
+  const canChallenge = mine && !activeFor(mine.id) && !mine.away && seasonOpen();
+  const targets = state.players.filter(p => canChallenge && !activeFor(p.id) && !p.away &&
     mine.position - p.position >= 1 && mine.position - p.position <= 2);
 
   $('#meHint').textContent = !mine ? 'Choose your name to see who you can challenge. Your PIN is only needed to make changes.'
+    : mine.away ? `You are marked as ${mine.away.label.toLowerCase()} until ${fmtDay(mine.away.end)}. You cannot challenge or be challenged until then.`
     : activeFor(mine.id) ? 'You are in a challenge. Finish it before making another.'
     : !seasonOpen() ? 'New challenges are closed (there is not enough time left in the season).'
     : mine.position === 1 ? 'You are top of the ladder!'
     : targets.length ? 'Tap a green name to challenge them.'
-    : 'Both players above you are already in challenges. Try again later.';
+    : 'The players above you are in challenges or away. Try again later.';
 
   $('#ladder').innerHTML = state.players.map(p => {
     const ch = activeFor(p.id), target = targets.includes(p);
-    const tag = ch ? `<span class="tag">${ch.challengerId === p.id ? 'Challenging' : 'Challenged by'} ${esc(ch.challengerId === p.id ? ch.defenderName : ch.challengerName)}</span>` : '';
-    return `<li class="row${ch ? ' is-busy' : ''}${target ? ' is-target' : ''}${p.id === me ? ' is-me' : ''}">
+    const next = !p.away && p.absences[0];
+    const tag = (ch ? `<span class="tag">${ch.challengerId === p.id ? 'Challenging' : 'Challenged by'} ${esc(ch.challengerId === p.id ? ch.defenderName : ch.challengerName)}</span>` : '') +
+      (p.away ? `<span class="tag away">${awayIcon(p.away)} ${esc(p.away.label)} until ${fmtDay(p.away.end)}</span>` : '') +
+      (next ? `<span class="tag soon">Away from ${fmtDay(next.start)}</span>` : '');
+    return `<li class="row${ch ? ' is-busy' : ''}${p.away ? ' is-away' : ''}${target ? ' is-target' : ''}${p.id === me ? ' is-me' : ''}">
       <span class="pos">${p.position}</span>
       <span class="name">${target ? `<button class="link" data-challenge="${p.id}">${esc(p.name)}</button>` : esc(p.name)}</span>
       ${tag}${target ? `<button class="primary sm" data-challenge="${p.id}">Challenge</button>` : ''}</li>`;
@@ -285,6 +295,48 @@ function changePin() {
   });
 }
 
+function awayDialog() {
+  const p = player(me);
+  if (!p) return notice("I'm away", '<p>Choose your name at the top first.</p>');
+  const A = state.away, left = A.seasonDays - p.awayUsed, today = londonDay();
+  const max = new Date(Date.parse(today + 'T12:00:00Z') + A.aheadDays * 24 * HOUR).toISOString().slice(0, 10);
+  const list = p.absences.map(a => `<div class="card" style="border-left-color:#8a958d"><b>${awayIcon(a)} ${esc(a.label)}</b>: ${fmtDay(a.start)} to ${fmtDay(a.end)}
+    <div class="actions"><button type="button" class="sm secondary" data-end="${a.id}">${a.start > today ? 'Cancel this' : "I'm back early"}</button></div></div>`).join('');
+  const form = modal({
+    title: `Away: ${p.name}`,
+    body: `<p class="muted">While you are away you keep your place, and you cannot challenge or be challenged.
+      Up to ${A.maxDays} days at a time and ${A.seasonDays} days a season, with at least ${A.gapDays} days back in between.
+      You have <b>${left} days</b> left this season.</p>${list}
+      <fieldset><legend>Book time away</legend>
+        <label><input type="radio" name="type" value="holiday" required> 🏖 Holiday</label>
+        <label><input type="radio" name="type" value="work"> 💼 Working away</label></fieldset>
+      <label>First day away<input type="date" name="start" required min="${today}" max="${max}"></label>
+      <label>Last day away<input type="date" name="end" required min="${today}"></label>
+      <p class="muted" id="awayDays"></p>${pinField()}
+      <p class="muted">If you are in a challenge, finish it first or ask Adam.</p>`,
+    ok: 'Book time away',
+    onOk: async f => {
+      await post({ action: 'away', playerId: me, pin: f.get('pin'), type: f.get('type'), start: f.get('start'), end: f.get('end') });
+      return () => notice('Time away booked', '<p>The ladder now shows when you are away.</p>');
+    }
+  });
+  const showDays = () => {
+    const s = form.start.value, e = form.end.value;
+    if (s) form.end.min = s;
+    form.querySelector('#awayDays').textContent = s && e && e >= s ? `${(Date.parse(e) - Date.parse(s)) / 86400000 + 1} days` : '';
+  };
+  form.start.oninput = showDays;
+  form.end.oninput = showDays;
+  form.querySelectorAll('[data-end]').forEach(b => {
+    b.onclick = () => modal({
+      title: b.textContent,
+      body: pinField(),
+      ok: 'Confirm',
+      onOk: f => post({ action: 'endAway', playerId: me, pin: f.get('pin'), absenceId: b.dataset.end })
+    });
+  });
+}
+
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-challenge], [data-act]');
   if (!t || !state || location.hash.startsWith('#admin')) return;
@@ -296,6 +348,7 @@ document.addEventListener('click', e => {
 
 $('#me').onchange = e => { me = e.target.value; store.set('ladderMe', me); render(); };
 $('#changePin').onclick = changePin;
+$('#awayBtn').onclick = awayDialog;
 
 /* ---------- Admin view ---------- */
 
@@ -344,6 +397,7 @@ async function renderAdmin() {
         <a class="btn sm whatsapp" target="_blank" rel="noopener" href="${waLink(p.phone, inviteText(p))}">Send details</a>
         <button class="sm secondary" data-a="edit" data-id="${p.id}">Edit</button>
         <button class="sm secondary" data-a="move" data-id="${p.id}">Move</button>
+        <button class="sm secondary" data-a="away" data-id="${p.id}">Away${p.absences.length ? ' ✓' : ''}</button>
         <button class="sm secondary" data-a="pin" data-id="${p.id}">New PIN</button>
         <button class="sm danger" data-a="remove" data-id="${p.id}">Remove</button></div></td></tr>`).join('')}</tbody>
     </table></div></section>
@@ -424,6 +478,28 @@ async function renderAdmin() {
         ok: 'Save',
         onOk: async f => { await admin('adminUpdatePlayer', { id: p.id, ...Object.fromEntries(f) }); return done; }
       });
+      if (a === 'away') {
+        const f = modal({
+          title: `Away: ${p.name}`,
+          body: `<p class="muted">Admin can set any dates; the usual limits do not apply. Used this season: ${p.awayUsed} of ${state.away.seasonDays} days.
+            Any challenge they are in is not changed: book, cancel or set the result as needed.</p>
+            ${p.absences.map(x => `<div class="card"><b>${awayIcon(x)} ${esc(x.label)}</b>: ${fmtDay(x.start)} to ${fmtDay(x.end)}
+              <div class="actions"><button type="button" class="sm danger" data-endaway="${x.id}">End / cancel</button></div></div>`).join('')}
+            <fieldset><legend>Add time away</legend>
+              <label><input type="radio" name="type" value="holiday" required> 🏖 Holiday</label>
+              <label><input type="radio" name="type" value="work"> 💼 Working away</label></fieldset>
+            <label>First day<input type="date" name="start" required></label>
+            <label>Last day<input type="date" name="end" required></label>`,
+          ok: 'Add',
+          onOk: async fd => { await admin('adminAway', { id: p.id, type: fd.get('type'), start: fd.get('start'), end: fd.get('end') }); return done; }
+        });
+        f.querySelectorAll('[data-endaway]').forEach(x => {
+          x.onclick = async () => {
+            try { await admin('adminEndAway', { absenceId: x.dataset.endaway }); $('#modal').close(); done(); }
+            catch (err) { f.querySelector('.err').textContent = err.message; }
+          };
+        });
+      }
       if (a === 'move') modal({
         title: `Move ${p.name}`,
         body: `<label>New position<input name="position" type="number" min="1" max="${players.length}" required value="${p.position}"></label>`,
